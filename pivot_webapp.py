@@ -6,27 +6,47 @@ import matplotlib.dates as mdates
 import investpy
 import datetime
 
+# Configurações da página
 st.set_page_config(page_title="Análise de Ponto Pivô", layout="centered")
 st.title("📊 Análise de Ponto Pivô com Gráfico de Candles")
 
-ticker_input = st.text_input("Digite o ticker do ativo (ex: SPY, AAPL, PETR4):", value="SPY")
-selected_date = st.date_input("Selecione a data de análise", datetime.date.today() - datetime.timedelta(days=1))
+# Inicializa o estado
+if "ticker_input" not in st.session_state:
+    st.session_state.ticker_input = "SPY"
+if "selected_date" not in st.session_state:
+    st.session_state.selected_date = datetime.date.today() - datetime.timedelta(days=1)
+if "analisar" not in st.session_state:
+    st.session_state.analisar = False
+
+# Entradas do usuário
+st.session_state.ticker_input = st.text_input(
+    "Digite o ticker do ativo (ex: SPY, AAPL, PETR4):",
+    value=st.session_state.ticker_input
+)
+st.session_state.selected_date = st.date_input(
+    "Selecione a data de análise",
+    value=st.session_state.selected_date
+)
 
 if st.button("Analisar"):
+    st.session_state.analisar = True
+
+# Início da análise
+if st.session_state.analisar:
     with st.spinner("🔍 Buscando dados..."):
-        data = yf.download(ticker_input.upper(), period="5d", interval="1d")
+        data = yf.download(st.session_state.ticker_input.upper(), period="7d", interval="1d")
 
     if data.empty or len(data) < 2:
         st.error("❌ Dados insuficientes para esse ativo.")
     else:
         data.index = pd.to_datetime(data.index)
-        selected_data = data[data.index.date == selected_date]
+        selected_data = data[data.index.date == st.session_state.selected_date]
 
         if selected_data.empty:
-            st.error(f"❌ Não há dados de mercado para {selected_date.strftime('%d/%m/%Y')}. Verifique se é um dia útil.")
+            st.error(f"❌ Não há dados de mercado para {st.session_state.selected_date.strftime('%d/%m/%Y')}. Verifique se é um dia útil.")
         else:
             last_day = selected_data.iloc[0]
-            date_str = selected_date.strftime("%d-%b-%Y")
+            date_str = st.session_state.selected_date.strftime("%d-%b-%Y")
 
             open_ = float(last_day["Open"])
             high = float(last_day["High"])
@@ -39,7 +59,7 @@ if st.button("Analisar"):
             r2 = pivot + (r1 - s1)
             s2 = pivot - (r1 - s1)
 
-            st.subheader(f"📅 Dados de {ticker_input.upper()} em {date_str}")
+            st.subheader(f"📅 Dados de {st.session_state.ticker_input.upper()} em {date_str}")
 
             # Tabela OHLC
             ohlc_df = pd.DataFrame({
@@ -63,23 +83,23 @@ if st.button("Analisar"):
                 use_container_width=True
             )
 
-            # Gráfico de Candles
-            df = data[data.index.weekday < 5].tail(10).copy().reset_index()
+            # Gráfico de Candles (sem espaços de fim de semana)
+            df = data[data.index.weekday < 5].tail(10).copy()
+            df["Date"] = pd.to_datetime(df.index)
+
             fig, ax = plt.subplots(figsize=(10, 5))
-
-            x = range(len(df))  # eixo categórico
-
-            for i, (_, row) in enumerate(df.iterrows()):
+            for idx, row in df.iterrows():
                 o = float(row["Open"])
                 h = float(row["High"])
                 l = float(row["Low"])
                 c = float(row["Close"])
                 color = "green" if c >= o else "red"
+                date = row["Date"]
 
-                ax.plot([x[i], x[i]], [l, h], color="black")
-                ax.plot([x[i], x[i]], [o, c], color=color, linewidth=6)
+                ax.plot([date, date], [l, h], color="black")
+                ax.plot([date, date], [o, c], color=color, linewidth=6)
 
-            # Linhas dos pivôs
+            # Linhas dos Pivôs
             pivots = [
                 (pivot, "Pivô", "purple"),
                 (r1, "R1", "green"), (r2, "R2", "darkgreen"),
@@ -87,40 +107,40 @@ if st.button("Analisar"):
             ]
             for level, label, color in pivots:
                 ax.axhline(level, color=color, linestyle="--", linewidth=1)
-                ax.text(x[-1], level, label, color=color, va="center", fontsize=9)
+                ax.text(df["Date"].iloc[-1], level, label, color=color, va="center", fontsize=9)
 
-            # Eixo X categórico sem dias vazios
-            ax.set_xticks(x)
-            ax.set_xticklabels(df["Date"].dt.strftime("%d-%b"), rotation=45)
-
-            ax.set_title(f"{ticker_input.upper()} – Candles & Pontos Pivô")
+            ax.set_title(f"{st.session_state.ticker_input.upper()} – Candles & Pontos Pivô")
             ax.set_ylabel("Preço (USD)")
+            ax.set_xlabel("Data")
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%b"))
+            ax.set_xticks(df["Date"])  # Garante que só datas úteis são exibidas
             ax.grid(True)
             plt.tight_layout()
             st.pyplot(fig)
 
+# Calendário Econômico
+st.subheader("📆 Calendário Econômico (EUA)")
 
-            # Calendário Econômico
-            try:
-                today = datetime.date.today()
-                from_date = today.strftime("%d/%m/%Y")
-                to_date = (today + datetime.timedelta(days=1)).strftime("%d/%m/%Y")
+col1, col2 = st.columns(2)
+with col1:
+    econ_date = st.date_input("Selecione a data do calendário econômico", datetime.date.today(), key="econ_date")
+with col2:
+    importance = st.selectbox("Relevância", ["high", "medium", "low"], index=0, key="importance")
 
-                df_events = investpy.news.economic_calendar(
-                    from_date=from_date,
-                    to_date=to_date,
-                    countries=['United States'],
-                    importances=['high']
-                )
+try:
+    from_date = econ_date.strftime("%d/%m/%Y")
+    to_date = (econ_date + datetime.timedelta(days=1)).strftime("%d/%m/%Y")
 
-                # Filtra para manter apenas os eventos do dia atual
-                df_events['date'] = pd.to_datetime(df_events['date'], format='%d/%m/%Y').dt.date
-                df_events_today = df_events[df_events['date'] == today]
+    df_events = investpy.news.economic_calendar(
+        from_date=from_date,
+        to_date=to_date,
+        countries=['United States'],
+        importances=[importance]
+    )
 
-                if not df_events_today.empty:
-                    st.subheader("📈 Calendário Econômico (EUA - Hoje)")
-                    st.dataframe(df_events_today[['date', 'time', 'event', 'importance', 'actual', 'forecast', 'previous']])
-                else:
-                    st.info("Nenhum evento relevante para os EUA hoje.")
-            except Exception as e:
-                st.warning(f"Erro ao buscar o calendário econômico: {e}")
+    if not df_events.empty:
+        st.dataframe(df_events[['date', 'time', 'event', 'importance', 'actual', 'forecast', 'previous']])
+    else:
+        st.info("Nenhum evento relevante para os EUA na data selecionada.")
+except Exception as e:
+    st.warning(f"Erro ao buscar o calendário econômico: {e}")
